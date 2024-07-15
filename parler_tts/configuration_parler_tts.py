@@ -26,6 +26,8 @@ MUSICGEN_PRETRAINED_CONFIG_ARCHIVE_MAP = {
 }
 
 
+
+
 class ParlerTTSDecoderConfig(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of an [`ParlerTTSDecoder`]. It is used to instantiate a
@@ -242,6 +244,12 @@ class ParlerTTSConfig(PretrainedConfig):
         self.audio_encoder = AutoConfig.for_model(audio_encoder_model_type, **audio_encoder_config)
         self.decoder = ParlerTTSDecoderConfig(**decoder_config)
         self.is_encoder_decoder = True
+
+        self.hidden_size = self.decoder.hidden_size
+        self.num_attention_heads = self.decoder.num_attention_heads
+        self.max_position_embeddings = self.decoder.max_position_embeddings
+        self.num_key_value_heads = self.decoder.num_key_value_heads
+        self.num_hidden_layers = self.decoder.num_hidden_layers
 
     @classmethod
     def from_sub_models_config(

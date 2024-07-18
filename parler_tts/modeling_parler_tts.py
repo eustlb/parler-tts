@@ -1364,9 +1364,6 @@ class ParlerTTSDecoder(ParlerTTSPreTrainedModel):
         if prompt_attention_mask is not None and attention_mask is not None:
             attention_mask = torch.cat([prompt_attention_mask, attention_mask], dim=1)
         elif prompt_attention_mask is not None:
-            logger.warning_once(
-                "`prompt_attention_mask` is specified but `attention_mask` is not. A full `attention_mask` will be created. Make sure this is the intended behaviour."
-            )
             if past_key_values is None:
                 attention_mask = torch.cat(
                     [
@@ -2820,6 +2817,29 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
             )
         elif use_cache:
             cache_position = cache_position[-decoder_input_ids.shape[1] :]
+        
+        if decoder_attention_mask is None:
+            input = decoder_input_ids.reshape(-1, self.decoder.num_codebooks, decoder_input_ids.shape[-1])
+            bsz, _, seq_len = input.shape
+            input_shape = (bsz, seq_len)
+
+            past_key_values_length = 0
+            if cache_position is not None:
+                past_key_values_length = cache_position[0]
+            elif past_key_values is not None:
+                past_key_values_length = past_key_values.get_seq_length()
+
+            logger.warning_once(
+                "`prompt_attention_mask` is specified but `attention_mask` is not. A full `attention_mask` will be created. Make sure this is the intended behaviour."
+            )
+            if past_key_values is None or (isinstance(past_key_values, EncoderDecoderCache) and past_key_values.get_seq_length() == 0):
+                decoder_attention_mask = torch.ones(input_shape, device=self.device, dtype=decoder_input_ids.dtype)
+            elif prompt_attention_mask is not None:
+                # In the generation case of `prompt_cross_attention=True`, we need to recreate an attention mask from scratch
+                # to be able to prepend the prompt attention mask.
+                # Since we generate token per token, we can recompute the generated length from the information we have.
+                generated_length = past_key_values_length - prompt_attention_mask.shape[1] + 1
+                decoder_attention_mask = torch.ones((input_shape[0], generated_length), device=self.device, dtype=prompt_attention_mask.dtype)
 
         return {
             "input_ids": None,  # encoder_outputs is defined. input_ids not needed
@@ -3383,7 +3403,7 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
                     "Please refer to the documentation for more information. "
                     "(https://huggingface.co/docs/transformers/main/en/main_classes/text_generation)"
                 )
-            generation_config.max_length = generation_config.max_new_tokens + input_ids_seq_length
+            generation_config.max_length = generation_config.max_new_tokens + input_ids_seq_length 
 
         if generation_config.min_length is not None and generation_config.min_length > generation_config.max_length:
             raise ValueError(
@@ -3410,10 +3430,15 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
                         "This model does not support `cache_implementation='static'`. Please check the following "
                         "issue: https://github.com/huggingface/transformers/issues/28981"
                     )
+                # when we prepend prompt_hidden_state to inputs_embeds, max_cache_len needs to be actualised
+                # generation_config.max_length has already been increased by input_ids_seq_length which is
+                # already counted in input_embeds_seq_length so we remove it
+                input_embeds_seq_length = model_kwargs["inputs_embeds"].shape[1]
+                max_cache_len = generation_config.max_length + input_embeds_seq_length - input_ids_seq_length
                 model_kwargs["past_key_values"] = self._get_cache(
                     generation_config.cache_implementation,
                     getattr(generation_config, "num_beams", 1) * batch_size,
-                    generation_config.max_length,
+                    max_cache_len,
                     model_kwargs,
                 )
             elif generation_config.cache_implementation == "quantized":

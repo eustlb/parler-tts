@@ -1429,9 +1429,6 @@ class ParlerTTSDecoder(ParlerTTSPreTrainedModel):
             output_attentions,
         )
 
-        # TODO: TO BE CHANGED
-        ##########
-        # expand encoder attention mask
         if encoder_hidden_states is not None and encoder_attention_mask is not None:
             if self.encoder_attn_implementation == "flash_attention_2":
                 encoder_attention_mask = encoder_attention_mask if 0 in encoder_attention_mask else None
@@ -1449,14 +1446,6 @@ class ParlerTTSDecoder(ParlerTTSPreTrainedModel):
                 encoder_attention_mask = _prepare_4d_attention_mask(
                     encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
                 )
-            # encoder_causal_mask = self._update_causal_mask(
-            #     encoder_attention_mask,
-            #     inputs_embeds,
-            #     cache_position,
-            #     past_key_values.self_attention_cache if past_key_values is not None else None,
-            #     output_attentions,
-            # )
-        ##########
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -2818,7 +2807,7 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
         elif use_cache:
             cache_position = cache_position[-decoder_input_ids.shape[1] :]
         
-        if decoder_attention_mask is None:
+        if decoder_attention_mask is None and prompt_attention_mask is not None:
             input = decoder_input_ids.reshape(-1, self.decoder.num_codebooks, decoder_input_ids.shape[-1])
             bsz, _, seq_len = input.shape
             input_shape = (bsz, seq_len)
@@ -3430,11 +3419,14 @@ class ParlerTTSForConditionalGeneration(PreTrainedModel):
                         "This model does not support `cache_implementation='static'`. Please check the following "
                         "issue: https://github.com/huggingface/transformers/issues/28981"
                     )
-                # when we prepend prompt_hidden_state to inputs_embeds, max_cache_len needs to be actualised
-                # generation_config.max_length has already been increased by input_ids_seq_length which is
-                # already counted in input_embeds_seq_length so we remove it
-                input_embeds_seq_length = model_kwargs["inputs_embeds"].shape[1]
-                max_cache_len = generation_config.max_length + input_embeds_seq_length - input_ids_seq_length
+                if not self.prompt_cross_attention:
+                    # when we prepend prompt_hidden_state to inputs_embeds, max_cache_len needs to be actualised
+                    # generation_config.max_length has already been increased by input_ids_seq_length which is
+                    # already counted in input_embeds_seq_length so we remove it
+                    input_embeds_seq_length = model_kwargs["inputs_embeds"].shape[1]
+                    max_cache_len = generation_config.max_length + input_embeds_seq_length - input_ids_seq_length
+                else:
+                    max_cache_len = self.generation_config.max_length
                 model_kwargs["past_key_values"] = self._get_cache(
                     generation_config.cache_implementation,
                     getattr(generation_config, "num_beams", 1) * batch_size,
